@@ -1,0 +1,170 @@
+import numpy as np
+import tensorflow as tf
+import keras
+from tensorflow.keras.layers import Dense, LeakyReLU, BatchNormalization, Reshape, Flatten
+from tensorflow.keras.models import Sequential
+from scipy.io import loadmat
+import matplotlib.pyplot as plt
+import scipy.signal
+
+data = loadmat('C:\\Users\\Elizabeth Nemeti\\Desktop\\eeglab2023.0\\epochs.mat')
+epochs = data['epochs']
+
+# Assuming epochs is a 10x1 cell array, each cell containing a 15x1200 array
+eeg_data = np.array([epoch[0] for epoch in epochs])  # Convert to numpy array
+
+# Normalize the EEG data (optional, but can improve training stability)
+eeg_data = (eeg_data - eeg_data.min()) / (eeg_data.max() - eeg_data.min())
+
+# Transform the EEG data into the frequency domain
+eeg_data = np.fft.rfft(eeg_data)
+
+# Sampling frequency in Hz
+fs = 200
+
+# Number of samples per epoch
+epoch_length = 1200 # 200Hz*60s
+
+# Number of channels
+num_channels = 15
+
+# Number of epochs
+num_epochs = 10
+
+# GAN parameters
+noise_dim = 100
+batch_size = 10
+gan_epochs = 100
+learning_rate = 0.0002
+
+# Generator model
+def create_generator():
+    model = Sequential()
+    model.add(Dense(256, input_dim=noise_dim))
+    model.add(LeakyReLU(alpha=0.2))
+    model.add(BatchNormalization(momentum=0.8))
+    model.add(Dense(512))
+    model.add(LeakyReLU(alpha=0.2))
+    model.add(BatchNormalization(momentum=0.8))
+    model.add(Dense(1024))
+    model.add(LeakyReLU(alpha=0.2))
+    model.add(BatchNormalization(momentum=0.8))
+    model.add(Dense(np.prod(eeg_data.shape[1:]), activation='tanh'))
+    model.add(Reshape(eeg_data.shape[1:]))
+    return model
+
+
+# Discriminator model
+def create_discriminator():
+    model = Sequential()
+    model.add(Flatten(input_shape=eeg_data.shape[1:]))
+    model.add(Dense(512))
+    model.add(LeakyReLU(alpha=0.2))
+    model.add(Dense(256))
+    model.add(LeakyReLU(alpha=0.2))
+    model.add(Dense(1, activation='sigmoid'))
+    return model
+
+
+# Create generator and discriminator models
+generator = create_generator()
+discriminator = create_discriminator()
+
+# Compile the discriminator model
+discriminator.compile(optimizer=tf.keras.optimizers.Adam(learning_rate), loss='binary_crossentropy',
+                      metrics=['accuracy'])
+
+# Create the combined GAN model
+discriminator.trainable = False
+gan_input = tf.keras.Input(shape=(noise_dim,))
+generated_data = generator(gan_input)
+gan_output = discriminator(generated_data)
+gan = tf.keras.Model(gan_input, gan_output)
+gan.compile(optimizer=tf.keras.optimizers.Adam(learning_rate), loss='binary_crossentropy')
+
+
+# Function to train the GAN
+def train_gan(epochs, batch_size):
+    real_labels = np.ones((batch_size, 1))
+    fake_labels = np.zeros((batch_size, 1))
+
+    for epoch in range(epochs):
+        # Train the discriminator
+        idx = np.random.randint(0, eeg_data.shape[0], batch_size)
+        real_data = eeg_data[idx]
+        noise = np.random.normal(0, 1, (batch_size, noise_dim))
+        fake_data = generator.predict(noise)
+        real_loss = discriminator.train_on_batch(real_data, real_labels)
+        fake_loss = discriminator.train_on_batch(fake_data, fake_labels)
+        discriminator_loss = 0.5 * np.add(real_loss, fake_loss)
+
+        # Train the generator
+        noise = np.random.normal(0, 1, (batch_size, noise_dim))
+        generator_loss = gan.train_on_batch(noise, real_labels)
+
+        # Display the progress
+        print(
+            f"Epoch {epoch}, [D loss: {discriminator_loss[0]}, accuracy: {100 * discriminator_loss[1]}], [G loss: {generator_loss}]")
+
+
+# Train the GAN
+train_gan(gan_epochs, batch_size)
+
+# Generate new synthetic EEG data
+noise = np.random.normal(0, 1, (num_epochs, noise_dim))
+synthetic_eeg = generator.predict(noise)
+
+# Transform synthetic data back into the time domain
+synthetic_eeg = np.fft.irfft(synthetic_eeg)
+
+# Initialize arrays to store average PSD and Cross-Correlation
+avg_psd_orig = np.zeros_like(welch(eeg_data[0, 0, :], fs)[1])
+avg_psd_syn = np.zeros_like(avg_psd_orig)
+avg_cross_corr = np.zeros(2*epoch_length - 1)
+
+# Loop through all epochs
+for epoch in range(num_epochs):
+    for channel in range(num_channels):
+        # Select one epoch for comparison
+        original_epoch = eeg_data[epoch, channel, :]
+        synthetic_epoch = synthetic_eeg[epoch, channel, :]
+
+        # Spectral analysis
+        frequencies_orig, psd_orig = welch(original_epoch, fs)
+        frequencies_syn, psd_syn = welch(synthetic_epoch, fs)
+
+        # Update average PSD
+        avg_psd_orig += psd_orig
+        avg_psd_syn += psd_syn
+
+        # Cross-correlation
+        cross_corr = correlate(original_epoch, synthetic_epoch)
+
+        # Update average Cross-Correlation
+        avg_cross_corr += cross_corr
+
+# Average PSD and Cross-Correlation over all epochs
+avg_psd_orig /= num_epochs * num_channels
+avg_psd_syn /= num_epochs * num_channels
+avg_cross_corr /= num_epochs * num_channels
+
+# Plot average PSD
+plt.figure(figsize=(10, 4))
+
+plt.subplot(1, 2, 1)
+plt.plot(frequencies_orig, avg_psd_orig, label='Original')
+plt.plot(frequencies_syn, avg_psd_syn, label='Synthetic')
+plt.title('Average Power Spectral Density')
+plt.xlabel('Frequency (Hz)')
+plt.ylabel('Power')
+plt.legend()
+
+# Plot average Cross-Correlation
+plt.subplot(1, 2, 2)
+plt.plot(avg_cross_corr)
+plt.title('Average Cross-Correlation')
+plt.xlabel('Lag')
+plt.ylabel('Correlation')
+plt.tight_layout()
+plt.show()
+
