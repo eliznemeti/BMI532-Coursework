@@ -1,0 +1,97 @@
+%% Building and Testing the Classifier (SVM)
+
+% Load the file names
+interictal_files = dir('./Patient_1_preictal_segment_*.mat');
+preictal_files = dir('./Patient_1_interictal_segment_*.mat');
+test_files = dir('./Patient_1_test_segment_*.mat');
+
+% Extract features from the data files
+interictal_features = extractFeatures(interictal_files);
+preictal_features = extractFeatures(preictal_files);
+
+% Create the feature matrix and the labels
+features = [interictal_features; preictal_features];
+labels = [zeros(size(interictal_features, 1), 1); ones(size(preictal_features, 1), 1)];
+
+% Print dataset information
+disp(['Size of feature matrix: ', num2str(size(features))]);
+disp(['Number of interictal samples: ', num2str(sum(labels == 0))]);
+disp(['Number of preictal samples: ', num2str(sum(labels == 1))]);
+
+
+% Number of samples in the dataset
+num_samples = length(labels);
+
+% Initialize variables to store results
+accuracy = zeros(num_samples, 1);
+scores = zeros(num_samples, 2);
+
+% Perform leave-one-out cross-validation
+for i = 1:num_samples
+    % Create training and testing sets
+    testIdx = i;
+    trainIdx = setdiff(1:num_samples, testIdx);
+    
+    X_train = features(trainIdx, :);
+    y_train = labels(trainIdx);
+    X_test = features(testIdx, :);
+    y_test = labels(testIdx);
+
+    % Display debugging information
+    disp(['Iteration: ', num2str(i)]);
+    disp(['y_test: ', num2str(y_test')]);
+    
+    % Train the SVM classifier and obtain the scores
+    svm_model = fitcsvm(X_train, y_train, 'KernelFunction', 'linear', 'BoxConstraint', 1, 'Standardize', true, 'ClassNames', [0, 1]);
+    
+    % Predict the labels for the test data
+    y_pred = predict(svm_model, X_test);
+    disp(['Iteration: ', num2str(i)]);
+    disp(['y_test: ', num2str(y_test)]);
+    disp(['y_pred: ', num2str(y_pred)]);
+
+    % Display debugging information
+    disp(['Iteration: ', num2str(i)]);
+    disp(['y_test: ', num2str(y_test')]);
+    disp(['y_pred: ', num2str(y_pred')]);
+
+    
+    % Calculate the accuracy for the current iteration
+    accuracy(i) = sum(y_test == y_pred) / length(y_test);
+end
+
+% Calculate the average accuracy
+avg_accuracy = mean(accuracy);
+disp(['Average accuracy: ', num2str(avg_accuracy)]);
+
+% Calculate the ROC curve
+[~, ~, thresholds, AUC] = perfcurve(labels, scores(:, 2), 1);
+
+% Plot the ROC curve
+figure;
+plotroc(labels', scores(:, 2)');
+xlabel('False Positive Rate');
+ylabel('True Positive Rate');
+title(['ROC curve (AUC = ' num2str(AUC) ')']);
+
+% Extract features function
+function features = extractFeatures(file_list)
+    num_files = length(file_list);
+    features = [];
+
+    for i = 1:num_files
+        % Load the data from the file
+        data = load(file_list(i).name);
+        field_name = fieldnames(data);
+        eeg_data = data.(field_name{1}).data;
+
+        % Calculate the power spectral density (PSD)
+        [pxx, ~] = pwelch(eeg_data', [], [], [], 200); % Assuming a sampling rate of 200 Hz
+
+        % Average the PSD across all channels
+        mean_pxx = mean(pxx, 2);
+
+        % Append the mean_pxx to the features matrix
+        features = [features; mean_pxx'];
+    end
+end
