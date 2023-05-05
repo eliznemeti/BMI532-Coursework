@@ -1,0 +1,327 @@
+%% Code for Segmentation, Stationarity Check, Autocorrelation Tests
+
+% interictal data
+int_p1_01_preprocessing_filtered = pop_loadset('int_p1_01_preprocessing_data_filtered.set');
+int_p1_01_preprocessing_filtered_data = int_p1_01_preprocessing_filtered.data;
+
+% Sampling frequency in Hz
+fs = 200; 
+
+% Number of samples per epoch
+% epoch_length = 12000; % 200Hz*60s
+% epoch_length = 2000; % 200Hz*10s
+% epoch_length = 200; % 200Hz*1s
+epoch_length = 20; % 200Hz*0.1s
+% epoch_length = 2; % 200Hz*0.01s
+
+
+% Number of channels
+num_channels = 15;
+
+% Number of epochs
+% num_epochs = 10;
+% num_epochs = 60;
+% num_epochs = 200;
+num_epochs = 6000;
+% num_epochs = 60000;
+
+% Create nested cell array to store epochs
+epochs_interictal = cell(num_epochs, 1);
+
+% Split and save data into epochs
+for i = 1:num_epochs
+    epoch_start = (i - 1) * epoch_length + 1;
+    epoch_end = epoch_start + epoch_length - 1;
+    epochs_interictal{i} = int_p1_01_preprocessing_filtered_data(:, epoch_start:epoch_end);
+end
+
+% Calculate epoch duration in seconds
+epoch_duration = epoch_length / fs;
+
+% Display the information about epochs and epoch duration
+fprintf('The data has been segmented into %d epochs, each %d seconds long.\n', num_epochs, epoch_duration);
+
+% Create variables to count stationary and non-stationary epochs
+num_stationary_epochs = 0;
+num_non_stationary_epochs = 0;
+
+% Create a matrix to store stationarity results (rows: channels, columns: epochs)
+stationarity_matrix = zeros(num_channels, num_epochs);
+
+%% Checking Assumptions (check if data is stationary)
+for i = 1:num_epochs
+    epoch_data = epochs_interictal{i};
+    
+    for j = 1:num_channels
+        % Convert epoch data to double precision for stationarity check
+        channel_data = double(epoch_data(j, :));
+        
+        [h, ~] = adftest(channel_data); % Augmented Dickey-Fuller test for each epoch
+%         [h, ~] = kpsstest(channel_data); % Kwiatkowski-Phillips-Schmidt-Shin (KPSS) test
+        
+        % Store the stationarity result for each channel and epoch
+        stationarity_matrix(j, i) = h == 0;
+    end
+end
+
+% Calculate the percentage of stationary and non-stationary epochs for each channel
+stationary_percentage = sum(stationarity_matrix, 2) / num_epochs * 100;
+non_stationary_percentage = 100 - stationary_percentage;
+
+% Print the results
+for i = 1:num_channels
+    fprintf('Channel %d has %.2f%% of stationary epochs and %.2f%% of non-stationary epochs.\n', i, stationary_percentage(i), non_stationary_percentage(i));
+end
+
+%% Visual inspection of stationarity - time domain
+num_plots = 2; % Number of plots to display, 2 examples
+
+figure;
+
+% Add title to the figure
+sgtitle(sprintf('Visual inspection for %d second long epochs', epoch_duration));
+
+% Plot time series for a few random epochs and channels
+for i = 1:num_plots
+    % Select random epoch and channel
+    rand_epoch = randi(num_epochs);
+    rand_channel = randi(num_channels);
+    
+    % Get the data for the selected epoch and channel
+    epoch_data = epochs_interictal{rand_epoch};
+    channel_data = double(epoch_data(rand_channel, :));
+    
+    % Plot the time series
+    subplot(num_plots, 1, i);
+    plot(channel_data);
+    title(sprintf('Epoch %d, Channel %d', rand_epoch, rand_channel));
+    xlabel('Time (samples)');
+    ylabel('Amplitude');
+end
+
+
+%% Visual inspection of stationarity - spectrogram
+num_plots = 2; % Number of plots to display, 2 examples
+
+figure;
+
+% Plot time series for a few random epochs and channels
+for i = 1:num_plots
+    % Select random epoch and channel
+    rand_epoch = randi(num_epochs);
+    rand_channel = randi(num_channels);
+    
+    % Get the data for the selected epoch and channel
+    epoch_data = epochs_interictal{rand_epoch};
+    channel_data = double(epoch_data(rand_channel, :));
+    
+    % Calculate window length, overlap, and FFT length based on the epoch length
+    window_length = round(epoch_length * 0.2); % 20% of epoch length
+    noverlap = round(window_length * 0.5); % 50% overlap
+    nfft = max(256, 2^nextpow2(window_length));
+
+    % Spectrogram calculation
+    window = hann(window_length);
+    [s, f, t] = spectrogram(channel_data, window, noverlap, nfft, fs);
+    
+    % Plot the spectrogram
+    subplot(num_plots, 1, i);
+    imagesc(t, f, 10*log10(abs(s)));
+    axis xy;
+    title(sprintf('Epoch %d, Channel %d', rand_epoch, rand_channel));
+    xlabel('Time (s)');
+    ylabel('Frequency (Hz)');
+    colorbar;
+end
+
+sgtitle(sprintf('Spectrograms for %d second long epochs', epoch_duration));
+
+%% Section: Autocorrelation/ Correlogram
+% Calculate the autocorrelation for each channel and epoch
+for ch = 1:num_channels
+for ep = 1:num_epochs
+autocorr_data(ch, :, ep) = xcorr(epochs_interictal{ep}(ch, :), 'unbiased');
+end
+autocorr_values{ch} = mean(squeeze(autocorr_data(ch, :, :)), 2);
+end
+
+% create the x-axis values for the autocorrelation plot
+time_lag = (-epoch_length + 1):(epoch_length - 1);
+time_lag_sec = time_lag / fs;
+
+% plot the average autocorrelation across all epochs for each channel
+for ch = 1:num_channels
+    figure;
+    plot(time_lag_sec, mean(autocorr_data(ch, :, :), 3));
+    xlabel('Time lag (s)');
+    ylabel('Autocorrelation');
+    title(['Autocorrelation for Channel ', num2str(ch)]);
+    grid on;
+end
+
+% Determining autocorrelation strength
+% calculating max possible autocorrelation value for each channel (the square of the signal's standard deviation) and compare it with the autocorrelation values at zero lag
+
+% Initialize array to store maximum possible autocorrelation values
+max_autocorrelations = zeros(num_channels, 1);
+
+% Calculate maximum possible autocorrelation values for each channel
+for ch = 1:num_channels
+max_autocorrelations(ch) = var(int_p1_01_preprocessing_filtered_data(ch, :)) * size(int_p1_01_preprocessing_filtered_data, 2);
+end
+
+% Calculate autocorrelation values at zero lag for each channel
+autocorrelations_zero_lag = zeros(num_channels, 1);
+for ch = 1:num_channels
+    autocorrelations_zero_lag(ch) = autocorr_values{ch}(time_lag == 0);
+end
+
+% Calculate the ratio of autocorrelation values at zero lag to the maximum possible values
+ratio_autocorr = autocorrelations_zero_lag ./ max_autocorrelations;
+% Display the ratio of autocorrelation values at zero lag to the maximum possible values
+for ch = 1:num_channels
+if ratio_autocorr(ch) >= 0.9
+strength_msg = 'high/strong autocorrelation';
+else
+strength_msg = 'low/weak autocorrelation';
+end
+
+output_str = sprintf('Ratio of autocorrelation values at zero lag to the maximum possible values for Channel %d: %f, indicating %s.', ch, ratio_autocorr(ch), strength_msg);
+fprintf('%s\n', output_str);
+end
+
+
+%% ARIMA Model Testing
+% Initialize an array to hold the synthetic EEG data (to process each
+% segment individually
+synthetic_eeg = [];
+
+% Initialize an array to store the similarity scores for each epoch
+similarity_scores = zeros(num_epochs, 1);
+
+% Loop over each segment
+for i = 1:num_epochs
+
+    %% Data Processing Pipeline
+    % Select the current segment
+    eeg_data = epochs_interictal{i};
+
+    % Flatten the segmented EEG data into a single vector for further processing
+    eeg_data = reshape(eeg_data, 1, []);
+
+    % Convert the data to double
+    eeg_data = double(eeg_data);
+
+    %% Fitting a stochastic distribution
+    % Fit a Gaussian distribution to the data
+    dist = fitdist(eeg_data', 'Normal');
+
+    % Check if the data follows a normal distribution
+    [h,pValue] = chi2gof(eeg_data);
+
+    if h == 1
+        disp(['Epoch ', num2str(i), ' does not follow a normal distribution. Consider using other distributions.'])
+        % Consider using other distributions like Exponential or Gamma
+        % dist = fitdist(eeg_data', 'Exponential');
+        % dist = fitdist(eeg_data', 'Gamma');
+    end
+
+    % Apply the innovations filter to estimate the ARIMA model parameters
+    minAIC = inf;
+    bestOrder = [0 0 0];
+    
+    % Loop over potential orders
+    for p = 1:3
+        for d = 0:1
+            for q = 1:3
+                model = arima(p, d, q);
+                try
+                    [~,~,logL] = estimate(model, eeg_data', 'print', false);
+                    [aic, ~] = aicbic(logL, [p d q]);
+                    if aic < minAIC
+                        minAIC = aic;
+                        bestOrder = [p d q];
+                    end
+                catch
+                    % continue to next iteration if model fails to estimate
+                    continue
+                end
+            end
+        end
+    end
+    
+    % Now we use the bestOrder for the ARIMA model
+    arima_model = arima(bestOrder(1), bestOrder(2), bestOrder(3));
+    try
+        [fit,~,~] = estimate(arima_model, eeg_data');
+    catch exception
+        disp(['An error occurred in epoch ', num2str(i), ': ', exception.message])
+        continue
+    end
+
+    % Check if the model has been estimated correctly
+    if isempty(fit)
+        disp(['ARIMA model estimation failed for epoch ', num2str(i)])
+        continue
+    else
+        % Extract the AR, differencing and MA coefficients
+        if isfield(fit, 'AR') && ~isempty(fit.AR)
+            ar_coeffs = fit.AR{1};
+        else
+            ar_coeffs = [];
+        end
+        if isfield(fit, 'MA') && ~isempty(fit.MA)
+            ma_coeffs = fit.MA{1};
+        else
+            ma_coeffs = [];
+        end
+    end
+
+    %% Generate synthetic EEG data 
+    white_noise = randn(size(eeg_data)) * std(eeg_data); % Scale the white noise based on the standard deviation of the original data
+    synthetic_segment = filter([1 ma_coeffs], [1 ar_coeffs], white_noise);
+
+    % Add the randomness captured by the stochastic distribution
+    synthetic_segment = synthetic_segment + random(dist, size(eeg_data));
+
+    % Check if synthetic_segment contains any NaN or Inf values
+if any(isnan(synthetic_segment)) || any(isinf(synthetic_segment))
+disp(['Epoch ', num2str(i), ' generated a synthetic segment with NaN or Inf values. Skipping this epoch.'])
+continue;
+end
+
+% Append the synthetic data for the current segment to the full synthetic EEG signal
+synthetic_eeg = [synthetic_eeg, synthetic_segment];
+
+%% Spectral Factorization
+[pxx_synthetic,f] = pwelch(synthetic_segment, [], [], [], fs);
+[pxx_original,~] = pwelch(eeg_data, [], [], [], fs);
+
+%% Spectrogram Plotting
+figure;
+subplot(2,1,1);
+spectrogram(eeg_data, [], [], [], fs, 'yaxis');
+title(['Epoch ', num2str(i), ' Original EEG Data'])
+subplot(2,1,2);
+spectrogram(synthetic_segment, [], [], [], fs, 'yaxis');
+title(['Epoch ', num2str(i), ' Synthetic EEG Data'])
+
+%% Similarity Calculation
+% Calculate similarity between original and synthetic data using spectrograms
+spectrogram_original = abs(spectrogram(eeg_data, [], [], [], fs));
+spectrogram_synthetic = abs(spectrogram(synthetic_segment, [], [], [], fs));
+
+% Calculate the similarity score
+similarity_score_visual = corr2(spectrogram_original, spectrogram_synthetic);
+
+% Store the similarity score
+similarity_scores_visual(i) = similarity_score_visual;
+
+% Display the similarity score
+disp(['The synthetic data for epoch ', num2str(i), ' has a spectrogram similarity score of ', num2str(similarity_score_visual*100), '% compared to the original data.'])
+end
+
+% Calculate and display the overall similarity score
+overall_similarity_score_visual = mean(similarity_scores_visual);
+
+disp(['The synthetic data has an overall visual similarity score of ', num2str(overall_similarity_score_visual*100), '% compared to the original data.'])
