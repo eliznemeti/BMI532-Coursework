@@ -1,5 +1,3 @@
-# BMI532-Elizabeth-Nemeti-EEG-modeling
+Graduate Course: Emory BMI532 'Model-Based Machine Learning', taught by Dr Reza Sameni, Spring 2023, Masters Year 1
 
-Author: Elizabeth Nemeti <br>
-Grad Course: BMI 532: Model-Based Machine Learning <br>
-Project: Combining Physics-Based and Machine Learning Approaches for Improved Diagnosis and Management of Epilepsy using Synthetic EEG Models<br>
+![banner](banner.png)
